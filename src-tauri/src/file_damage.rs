@@ -104,8 +104,10 @@ fn previous_of(aside: &Path) -> PathBuf {
     aside.with_file_name(name)
 }
 
+/// The size of the file there. Anything else counts as no copy at all: a folder
+/// has a size of its own on a Mac, where Windows gives it none.
 fn length(path: &Path) -> Option<u64> {
-    std::fs::metadata(path).ok().map(|meta| meta.len())
+    std::fs::metadata(path).ok().filter(|meta| meta.is_file()).map(|meta| meta.len())
 }
 
 fn untold_of(aside_name: &str, dir: &Path) -> PathBuf {
