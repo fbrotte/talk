@@ -1,0 +1,96 @@
+name: Rust
+
+# The Rust side compiled and tested on both systems Talk runs on. build.yml leaves it out on
+# purpose, whisper.cpp being a long compile; this is the check a change to src-tauri/ answers
+# to before a release builds it. The cache keeps the second run short.
+
+on:
+  push:
+    paths:
+      - "src-tauri/**"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "src-tauri/**"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    env:
+      CARGO_TARGET_DIR: D:\t
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load the MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja
+        run: choco install ninja --no-progress -y
+
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP "vulkan_sdk.exe"
+          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe" -OutFile $installer
+          & $installer --root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install
+          if (-not (Test-Path "C:\VulkanSDK\Include\vulkan\vulkan.h")) {
+            throw "the Vulkan SDK did not land in C:\VulkanSDK"
+          }
+          "VULKAN_SDK=C:\VulkanSDK" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "C:\VulkanSDK\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install the pinned Rust toolchain
+        working-directory: src-tauri
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: oven-sh/setup-bun@v2
+
+      # The context macro reads the built frontend.
+      - name: Build the frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      # What scripts/vcenv.bat sets on a desk.
+      - name: Test
+        working-directory: src-tauri
+        env:
+          CC: cl.exe
+          CXX: cl.exe
+          CMAKE_GENERATOR: Ninja
+        run: cargo test
+
+  macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned Rust toolchain
+        working-directory: src-tauri
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build the frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --no-default-features --features metal
