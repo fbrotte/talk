@@ -6,6 +6,7 @@ import { Card } from "./Card";
 import { StepPage } from "./StepPage";
 import { StepTitle } from "./StepTitle";
 import { Tile } from "./Tile";
+import { systemName } from "@/lib/platform";
 
 interface StartupStepProps {
   autostart: boolean;
@@ -30,7 +31,7 @@ export function StartupStep({ autostart, minimized, onAutostartChange, onMinimiz
 
       <StartupRow
         icon={Power}
-        label={t("preferences.system.autostart.label")}
+        label={t("preferences.system.autostart.label", { system: systemName })}
         hint={t("preferences.system.autostart.hint")}
         checked={autostart}
         onChange={onAutostartChange}

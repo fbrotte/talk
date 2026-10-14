@@ -5,6 +5,7 @@ import { Note } from "./Note";
 import { StepPage } from "./StepPage";
 import { StepTitle } from "./StepTitle";
 import { gpuLabel, type GpuVendor, type TranscriptionMode } from "./types";
+import { systemName } from "@/lib/platform";
 
 interface SummaryStepProps {
   mode: TranscriptionMode;
@@ -47,7 +48,7 @@ export function SummaryStep({ mode, gpu, modelName, serverUrl, autostart, minimi
         ) : (
           <Line label={t("setup.complete.server")} value={serverUrl} />
         )}
-        <Line label={t("setup.complete.autostart")} value={yesNo(autostart)} />
+        <Line label={t("setup.complete.autostart", { system: systemName })} value={yesNo(autostart)} />
         <Line label={t("setup.complete.minimized")} value={yesNo(minimized)} />
       </Card>
 

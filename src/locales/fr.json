@@ -441,7 +441,7 @@
     "system": {
       "title": "Système",
       "autostart": {
-        "label": "Lancer avec Windows",
+        "label": "Lancer avec {{system}}",
         "hint": "Démarre à l'ouverture de la session"
       },
       "minimized": {
@@ -852,7 +852,7 @@
       "acceleration": "Accélération",
       "model": "Modèle",
       "server": "Serveur",
-      "autostart": "Lancer avec Windows",
+      "autostart": "Lancer avec {{system}}",
       "minimized": "Démarrer réduit",
       "yes": "Oui",
       "no": "Non"

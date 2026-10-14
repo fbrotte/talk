@@ -6,6 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { SYSTEM_DEFAULTS, resetTo } from "@/lib/factory-defaults";
 import LanguageRow from "./LanguageRow";
 import { Monitor } from "lucide-react";
+import { systemName } from "@/lib/platform";
 
 interface SystemSectionProps {
   autostartEnabled: boolean;
@@ -47,7 +48,7 @@ export default function SystemSection({
     <SectionCard icon={Monitor} title={t("preferences.system.title")}>
       <SettingRow
         onReset={resetTo(autostartEnabled, SYSTEM_DEFAULTS.autostart_enabled, onAutostartChange)}
-        label={t("preferences.system.autostart.label")}
+        label={t("preferences.system.autostart.label", { system: systemName })}
         hint={t("preferences.system.autostart.hint")}
       >
         <Switch checked={autostartEnabled} onCheckedChange={onAutostartChange} />

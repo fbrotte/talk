@@ -441,7 +441,7 @@
     "system": {
       "title": "System",
       "autostart": {
-        "label": "Start with Windows",
+        "label": "Start with {{system}}",
         "hint": "Launch when the session opens"
       },
       "minimized": {
@@ -852,7 +852,7 @@
       "acceleration": "Acceleration",
       "model": "Model",
       "server": "Server",
-      "autostart": "Start with Windows",
+      "autostart": "Start with {{system}}",
       "minimized": "Start minimised",
       "yes": "Yes",
       "no": "No"
