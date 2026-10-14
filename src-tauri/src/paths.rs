@@ -29,9 +29,14 @@ fn project_dirs(application: &str) -> Option<ProjectDirs> {
 }
 
 /// The directory that holds both `config` and `data`, when the platform lays
-/// them out that way (Windows does).
+/// them out that way (Windows does). On a Mac both are the application's own
+/// folder, whose parent is the whole of Application Support: that is no root of
+/// the application's, and there is nothing to migrate.
 fn root_of(application: &str) -> Option<PathBuf> {
     let dirs = project_dirs(application)?;
+    if dirs.config_dir() == dirs.data_dir() {
+        return None;
+    }
     let root = dirs.config_dir().parent()?.to_path_buf();
     (dirs.data_dir().parent() == Some(root.as_path())).then_some(root)
 }
