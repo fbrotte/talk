@@ -8,6 +8,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::type_text;
+
 #[derive(Error, Debug)]
 pub enum ClipboardError {
     #[error("Failed to set clipboard: {0}")]
@@ -171,13 +176,13 @@ pub fn type_text(text: &str, preserve_clipboard: bool) -> Result<(), ClipboardEr
     pasted
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn copy_and_paste(_text: &str) -> Result<(), ClipboardError> {
-    // Not implemented for non-Windows platforms yet
+    // Not implemented on this platform yet
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn type_text(_text: &str, _preserve_clipboard: bool) -> Result<(), ClipboardError> {
     Ok(())
 }
