@@ -949,6 +949,9 @@
       "prompt": "Connectez-vous pour retrouver vos réglages sur un autre PC"
     }
   },
+  "keys": {
+    "right": "{{key}} droite"
+  },
   "updates": {
     "title": "Mises à jour",
     "checkNow": "Vérifier maintenant",
