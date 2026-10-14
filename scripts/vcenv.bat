@@ -42,4 +42,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem cl.exe and Ninja for the CMake build of whisper.cpp. Ninja rather than the Visual Studio
+rem generator because it is faster and keeps the nested build paths shorter, which matters for
+rem vulkan-shaders-gen. Set here rather than in .cargo/config.toml, which cannot keep them to
+rem Windows.
+set "CC=cl.exe"
+set "CXX=cl.exe"
+set "CMAKE_GENERATOR=Ninja"
+
 %*

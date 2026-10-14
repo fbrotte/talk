@@ -1,8 +1,3 @@
-# scripts/vcenv.bat loads the MSVC environment before cargo runs, so cl.exe is on
-# PATH and Ninja picks it up directly. Ninja rather than the Visual Studio generator
-# because it is faster and keeps the nested build paths shorter, which matters for
-# vulkan-shaders-gen.
-[env]
-CC = "cl.exe"
-CXX = "cl.exe"
-CMAKE_GENERATOR = "Ninja"
+# The compiler whisper.cpp is built with is chosen by the platform's own environment. On Windows
+# scripts/vcenv.bat loads MSVC and names cl.exe and Ninja itself: cargo's [env] cannot be
+# restricted to one target, and set here it broke every other platform's CMake build.
