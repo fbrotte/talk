@@ -781,7 +781,8 @@
       "model_loading": "Model loading",
       "paste_failed": "Paste failed",
       "capture_failed": "No microphone",
-      "capture_lost": "Microphone lost"
+      "capture_lost": "Microphone lost",
+      "confirm_cancel": "Escape again to cancel"
     },
     "queued_one": "{{count}} still transcribing",
     "queued_other": "{{count}} still transcribing"
