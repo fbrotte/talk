@@ -16,6 +16,8 @@ mod lenient;
 mod keystroke;
 #[cfg(target_os = "macos")]
 mod macos_access;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod models;
 mod overlay;
 mod overlay_feedback;
@@ -1578,6 +1580,8 @@ pub fn run() {
                 .focusable(false);
 
             if let Ok(overlay_window) = overlay_builder.build() {
+                #[cfg(target_os = "macos")]
+                macos_window::float_everywhere(&overlay_window);
                 overlay::place(app.handle(), &overlay_window);
                 let w = overlay_window.clone();
                 std::thread::spawn(move || {
@@ -1586,6 +1590,9 @@ pub fn run() {
                     let _ = w.hide();
                 });
             }
+
+            #[cfg(target_os = "macos")]
+            macos_window::show_main_on_activation(app.handle());
 
             Ok(())
         })
