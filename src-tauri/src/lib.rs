@@ -1049,6 +1049,25 @@ fn simulate_keystroke_cmd(keys: String) -> Result<(), String> {
 // Virtual Mic Commands
 // ============================================================================
 
+/// Whether Talk may post key events and watch the keyboard: true wherever no such permission
+/// exists.
+#[tauri::command]
+fn accessibility_granted() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos_access::accessibility_granted(false);
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+/// Open System Settings on the Accessibility list, where Talk is ticked.
+#[tauri::command]
+fn open_accessibility_settings() {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("/usr/bin/open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .spawn();
+}
+
 #[tauri::command]
 fn get_vbcable_status() -> virtual_mic::VBCableStatus {
     virtual_mic::detect_vbcable()
@@ -1381,6 +1400,8 @@ pub fn run() {
             set_companion_shortcuts,
             simulate_keystroke_cmd,
             get_vbcable_status,
+            accessibility_granted,
+            open_accessibility_settings,
             install_blackhole,
             get_meeting_mode,
             set_meeting_mode,

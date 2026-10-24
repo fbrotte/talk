@@ -38,6 +38,7 @@ import { NoticeStrip } from "@/components/NoticeStrip";
 import { useGoogleInvite } from "@/lib/use-google-invite";
 import { GoogleInviteBanner } from "@/components/GoogleInviteBanner";
 import { PairingBanner } from "@/components/PairingBanner";
+import { AccessibilityBanner } from "@/components/AccessibilityBanner";
 import { defaultShortcut } from "@/lib/platform";
 
 export interface ModelInfo {
@@ -577,6 +578,7 @@ function App() {
 
       {/* What a release found on GitHub says for itself, when there is one */}
       <UpdateBanner updater={updater} />
+      <AccessibilityBanner />
       <PairingBanner pending={pendingPairings} />
       {serverOffer && (
         <ServerOfferBanner

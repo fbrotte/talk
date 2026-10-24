@@ -983,6 +983,11 @@
   "keys": {
     "right": "Right {{key}}"
   },
+  "accessibilityBanner": {
+    "title": "Talk lacks the Accessibility permission.",
+    "why": "Without it, neither the paste nor right ⌘ works.",
+    "open": "Open settings"
+  },
   "updates": {
     "title": "Updates",
     "checkNow": "Check now",

@@ -983,6 +983,11 @@
   "keys": {
     "right": "{{key}} droite"
   },
+  "accessibilityBanner": {
+    "title": "Talk n'a pas l'autorisation Accessibilité.",
+    "why": "Sans elle, ni le collage ni ⌘ droite ne fonctionnent.",
+    "open": "Ouvrir les r\u00e9glages"
+  },
   "updates": {
     "title": "Mises à jour",
     "checkNow": "Vérifier maintenant",
