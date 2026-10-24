@@ -108,7 +108,9 @@ p{{margin:0;font-size:15px;color:var(--muted)}}\
 <h1>{title}</h1><p>{message}</p></main></body></html>",
         lang = if french { "fr" } else { "en" },
         face = font_face(GEIST),
-        logo = LOGO,
+        // The SVG file names its namespace, which markup parsed as HTML does not need: left in,
+        // it was the one address on a page that must name none.
+        logo = LOGO.replacen(" xmlns=\"http://www.w3.org/2000/svg\"", "", 1),
         tone = tone,
         mark = mark,
         title = escape(text.title),
