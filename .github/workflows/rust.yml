@@ -61,13 +61,9 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
-      # What scripts/vcenv.bat sets on a desk.
+      # src-tauri/.cargo/config.toml names the MSVC compilers and Ninja.
       - name: Test
         working-directory: src-tauri
-        env:
-          CC: cl.exe
-          CXX: cl.exe
-          CMAKE_GENERATOR: Ninja
         run: cargo test
 
   macos:
@@ -92,5 +88,4 @@ jobs:
           bun run build
 
       - name: Test
-        working-directory: src-tauri
-        run: cargo test --no-default-features --features metal
+        run: bash scripts/tauri-macos.sh test
