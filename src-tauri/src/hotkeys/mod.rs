@@ -880,6 +880,15 @@ fn start_recording_internal(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// How long the microphone keeps listening after the shortcut that stops it. The last syllable
+/// is often still in the air, or still on its way through the driver, as the key goes down:
+/// taken at once, the recording lost the end of its last word.
+const TAIL: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// The silence put after a recording before it is transcribed. Whisper drops the words that end
+/// a recording cut off mid-breath, and keeps them when a little silence follows.
+const TRAILING_SILENCE_SAMPLES: usize = 16_000 / 2;
+
 /// A recording taken in, waiting to be transcribed.
 struct Dictation {
     seq: u64,
@@ -898,6 +907,9 @@ fn stop_recording(app: &AppHandle) -> Result<Dictation, String> {
     if !state.phase.lock().recording() {
         return Err("Not recording".to_string());
     }
+
+    // The press line hands events over one at a time, so nothing else moves while this waits.
+    std::thread::sleep(TAIL);
 
     let audio_data = {
         let buffer_lock = state.audio_buffer.lock();
@@ -941,6 +953,10 @@ async fn finish_dictation(app: AppHandle, dictation: Dictation) {
     // at 16 kHz, which is what the encoder and whisper both assume.
     let audio_duration_ms = (audio_data.len() as f64 / 16_000.0 * 1000.0) as i64;
     let started = std::time::Instant::now();
+    let mut audio_data = audio_data;
+    if !audio_data.is_empty() {
+        audio_data.resize(audio_data.len() + TRAILING_SILENCE_SAMPLES, 0.0);
+    }
 
     let outcome = if capture == Capture::Empty {
         // Said already, by the ending that turned it away.
