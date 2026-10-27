@@ -1,7 +1,8 @@
 {
   "bundle": {
     "macOS": {
-      "bundleVersion": "0.13.0"
+      "bundleVersion": "0.13.0",
+      "minimumSystemVersion": "15.0"
     }
   },
   "app": {
