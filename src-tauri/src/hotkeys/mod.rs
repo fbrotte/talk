@@ -880,10 +880,11 @@ fn start_recording_internal(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// How long the microphone keeps listening after the shortcut that stops it. The last syllable
-/// is often still in the air, or still on its way through the driver, as the key goes down:
-/// taken at once, the recording lost the end of its last word.
-const TAIL: std::time::Duration = std::time::Duration::from_millis(300);
+/// How long the microphone keeps listening after the shortcut that stops it, on top of the
+/// microphone's own latency. The last syllable is often still in the air as the key goes down:
+/// taken at once, the recording lost the end of its last word, and 300 ms was still too short
+/// for the hand that presses while the word is being said.
+const TAIL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The silence put after a recording before it is transcribed. Whisper drops the words that end
 /// a recording cut off mid-breath, and keeps them when a little silence follows.
@@ -909,7 +910,10 @@ fn stop_recording(app: &AppHandle) -> Result<Dictation, String> {
     }
 
     // The press line hands events over one at a time, so nothing else moves while this waits.
-    std::thread::sleep(TAIL);
+    // A Bluetooth microphone delivers its sound a good part of a second late: what was said as
+    // the key went down is that far from the buffer still.
+    let latency = state.audio_capture_handle.lock().as_ref().map(|handle| handle.latency()).unwrap_or_default();
+    std::thread::sleep(TAIL + latency.min(std::time::Duration::from_secs(1)));
 
     let audio_data = {
         let buffer_lock = state.audio_buffer.lock();

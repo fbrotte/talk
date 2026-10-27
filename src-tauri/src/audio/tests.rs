@@ -156,6 +156,7 @@ fn stopping_a_capture_handle_is_visible_to_its_clones() {
     let handle = AudioCaptureHandle {
         stop_signal: Arc::new(AtomicBool::new(false)),
         failed: Arc::new(AtomicBool::new(false)),
+        latency: std::time::Duration::ZERO,
     };
     let clone = handle.clone();
 
@@ -170,6 +171,7 @@ fn a_stream_error_is_seen_through_the_handle_and_its_clones() {
     let handle = AudioCaptureHandle {
         stop_signal: Arc::new(AtomicBool::new(false)),
         failed: failed.clone(),
+        latency: std::time::Duration::ZERO,
     };
     let clone = handle.clone();
     assert!(!handle.failed(), "a capture that has reported nothing is healthy");

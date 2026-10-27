@@ -122,9 +122,17 @@ pub struct AudioCaptureHandle {
     /// pulled out mid-recording from one that is simply quiet. A bare flag: the audio
     /// thread shares no lock with whoever reads it and allocates nothing to set it.
     failed: Arc<AtomicBool>,
+    /// How late the microphone's sound arrives, where the system says.
+    latency: std::time::Duration,
 }
 
 impl AudioCaptureHandle {
+    /// How late the microphone's sound arrives: what is said at the stop is still this far
+    /// from the buffer.
+    pub fn latency(&self) -> std::time::Duration {
+        self.latency
+    }
+
     /// Whether the stream reported an error since it started, after which what it
     /// recorded is silence.
     pub fn failed(&self) -> bool {
@@ -258,10 +266,19 @@ pub(crate) fn find_input_device(device_name: Option<&str>) -> Result<cpal::Devic
 /// If `device_name` is Some, uses that device; otherwise uses the system default.
 pub fn start_capture_device(device_name: Option<&str>) -> Result<(AudioBuffer, AudioCaptureHandle), AudioError> {
     let device = find_input_device(device_name)?;
-    start_capture_with_device(device)
+    #[cfg(target_os = "macos")]
+    let latency = device
+        .name()
+        .ok()
+        .and_then(|name| crate::virtual_mic::system_default::input_latency(&name))
+        .unwrap_or_default();
+    #[cfg(not(target_os = "macos"))]
+    let latency = std::time::Duration::ZERO;
+    eprintln!("Microphone latency: {} ms", latency.as_millis());
+    start_capture_with_device(device, latency)
 }
 
-fn start_capture_with_device(device: cpal::Device) -> Result<(AudioBuffer, AudioCaptureHandle), AudioError> {
+fn start_capture_with_device(device: cpal::Device, latency: std::time::Duration) -> Result<(AudioBuffer, AudioCaptureHandle), AudioError> {
     use std::sync::mpsc;
 
     let buffer = AudioBuffer::new();
@@ -347,7 +364,7 @@ fn start_capture_with_device(device: cpal::Device) -> Result<(AudioBuffer, Audio
     rx.recv()
         .map_err(|_| AudioError::BuildStream("Audio thread failed to start".to_string()))??;
 
-    let handle = AudioCaptureHandle { stop_signal, failed };
+    let handle = AudioCaptureHandle { stop_signal, failed, latency };
 
     Ok((buffer, handle))
 }

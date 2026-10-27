@@ -40,6 +40,10 @@ const DEVICES: u32 = code(b"dev#");
 const DEFAULT_INPUT: u32 = code(b"dIn ");
 const NAME: u32 = code(b"lnam");
 const STREAMS: u32 = code(b"stm#");
+const LATENCY: u32 = code(b"ltnc");
+const SAFETY_OFFSET: u32 = code(b"saft");
+const BUFFER_FRAMES: u32 = code(b"fsiz");
+const SAMPLE_RATE: u32 = code(b"nsrt");
 const SCOPE_GLOBAL: u32 = code(b"glob");
 const SCOPE_INPUT: u32 = code(b"inpt");
 const ELEMENT_MAIN: u32 = 0;
@@ -167,6 +171,60 @@ fn find_input(matches: impl Fn(&str) -> bool) -> Option<AudioObjectId> {
     input_devices()
         .into_iter()
         .find(|&device| name_of(device).is_some_and(|name| matches(&name)))
+}
+
+fn read<T: Default>(object: AudioObjectId, selector: u32, scope: u32) -> Option<T> {
+    let mut value = T::default();
+    let mut size = std::mem::size_of::<T>() as u32;
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            object,
+            &address(selector, scope),
+            0,
+            std::ptr::null(),
+            &mut size,
+            &mut value as *mut T as *mut c_void,
+        )
+    };
+    (status == 0).then_some(value)
+}
+
+/// The first input stream of a device, which carries a latency of its own.
+fn first_input_stream(device: AudioObjectId) -> Option<AudioObjectId> {
+    let mut size = 0u32;
+    let streams = address(STREAMS, SCOPE_INPUT);
+    if unsafe { AudioObjectGetPropertyDataSize(device, &streams, 0, std::ptr::null(), &mut size) } != 0 {
+        return None;
+    }
+    let mut ids = vec![0 as AudioObjectId; size as usize / std::mem::size_of::<AudioObjectId>()];
+    let status = unsafe {
+        AudioObjectGetPropertyData(device, &streams, 0, std::ptr::null(), &mut size, ids.as_mut_ptr() as *mut c_void)
+    };
+    (status == 0).then(|| ids.first().copied()).flatten()
+}
+
+/// How late a microphone's sound reaches Talk, as macOS reports it: the device, its stream,
+/// its safety offset and one buffer. Small for the built-in microphone, a good part of a
+/// second over Bluetooth, which is why the end of a recording waits for it. The microphone
+/// is named as cpal names it, which is the name CoreAudio gives.
+pub fn input_latency(name: &str) -> Option<std::time::Duration> {
+    let device = find_input(|candidate| candidate == name)?;
+    let rate: f64 = read(device, SAMPLE_RATE, SCOPE_GLOBAL)?;
+    if rate <= 0.0 {
+        return None;
+    }
+    let stream = first_input_stream(device).and_then(|stream| read::<u32>(stream, LATENCY, SCOPE_GLOBAL));
+    let frames = [
+        read::<u32>(device, LATENCY, SCOPE_INPUT),
+        read::<u32>(device, SAFETY_OFFSET, SCOPE_INPUT),
+        read::<u32>(device, BUFFER_FRAMES, SCOPE_INPUT),
+        stream,
+    ]
+    .into_iter()
+    .flatten()
+    .map(u64::from)
+    .sum::<u64>();
+    Some(std::time::Duration::from_secs_f64(frames as f64 / rate))
 }
 
 fn marker() -> PathBuf {
