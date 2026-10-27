@@ -6,6 +6,8 @@
 //! the permission is checked first and its absence is a failure the overlay says,
 //! rather than a paste that seems to have gone out.
 
+use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -76,7 +78,7 @@ fn set_clipboard(text: &str) -> Result<(), ClipboardError> {
 }
 
 /// kVK_ANSI_V, from Events.h.
-const ANSI_V: u32 = 9;
+const ANSI_V: CGKeyCode = 9;
 
 // The modifier bits of a CGEventFlags, as CGEventTypes.h names them.
 const SHIFT: u64 = 0x0002_0000;
@@ -122,20 +124,22 @@ fn simulate_paste() -> Result<(), ClipboardError> {
 
     wait_for_modifiers(&mut enigo);
 
-    enigo
-        .key(Key::Meta, Direction::Press)
-        .map_err(|e| ClipboardError::SimulateInput(e.to_string()))?;
-    // The V by its key code. Naming it by its letter has enigo ask the keyboard layout for it,
-    // which macOS allows on the main thread only and answers anywhere else by stopping the
-    // process. Code 9 is the V on QWERTY and AZERTY alike.
-    let pressed = enigo
-        .key(Key::Other(ANSI_V), Direction::Click)
-        .map_err(|e| ClipboardError::SimulateInput(e.to_string()));
-    // Command comes back up even when the V did not go out, or it would stay held.
-    enigo
-        .key(Key::Meta, Direction::Release)
-        .map_err(|e| ClipboardError::SimulateInput(e.to_string()))?;
-    pressed
+    // Command is carried by the V events themselves, not pressed as a key of its own. A V
+    // posted after a synthetic Command press takes its modifiers from the session's state,
+    // which the press reaches some time later: now and then not yet, and the window in front
+    // gets a bare v instead of the paste. The V by its key code: code 9 is the V on QWERTY
+    // and AZERTY alike, and naming it by its letter would ask the keyboard layout, which
+    // macOS allows on the main thread only.
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .map_err(|_| ClipboardError::SimulateInput("no event source for the paste".to_string()))?;
+    for down in [true, false] {
+        let event = CGEvent::new_keyboard_event(source.clone(), ANSI_V, down)
+            .map_err(|_| ClipboardError::SimulateInput("the paste key could not be made".to_string()))?;
+        event.set_flags(CGEventFlags::CGEventFlagCommand);
+        event.post(CGEventTapLocation::HID);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Ok(())
 }
 
 fn copy_and_paste(text: &str) -> Result<(), ClipboardError> {
