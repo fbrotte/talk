@@ -123,6 +123,7 @@ pub fn end_dictation(app: &AppHandle, ending: Ending) -> bool {
         let turn = take_turn(&release);
         (release, turn)
     };
+    crate::share::dictation_changed(app);
 
     // 2. The capture, and the machine given back.
     if ending.clears_capture() {

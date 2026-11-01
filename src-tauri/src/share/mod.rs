@@ -4,6 +4,7 @@
 mod announce;
 mod api;
 mod audio;
+mod dictation;
 mod formats;
 mod pairing;
 mod priority;
@@ -17,6 +18,7 @@ use crate::transcription::Transcript;
 use crate::{AcceleratorBackend, AppState};
 use announce::Announcement;
 use api::{ApiState, ShareBackend, TranscribeError};
+use dictation::DictationFeed;
 use pairing::{PairingStore, PendingPairing};
 use parking_lot::Mutex;
 use relay::Route;
@@ -76,6 +78,9 @@ struct Running {
     task: tauri::async_runtime::JoinHandle<()>,
     announcement: Option<Announcement>,
     port: u16,
+    // Dropped when the server stops, which ends the dictation feeds still open:
+    // aborting the server leaves the connections it accepted running.
+    _serving: tokio::sync::watch::Sender<()>,
 }
 
 pub struct ShareManager {
@@ -84,6 +89,9 @@ pub struct ShareManager {
     // port the first one is still letting go of.
     running: tokio::sync::Mutex<Option<Running>>,
     status: Mutex<Status>,
+    // Fed whether sharing is on or not, so a server started mid-dictation
+    // knows at once
+    dictation: DictationFeed,
 }
 
 impl Default for ShareManager {
@@ -92,6 +100,7 @@ impl Default for ShareManager {
             pairing: Arc::new(Mutex::new(PairingStore::default())),
             running: tokio::sync::Mutex::new(None),
             status: Mutex::new(Status::off()),
+            dictation: DictationFeed::default(),
         }
     }
 }
@@ -206,10 +215,29 @@ impl AppBackend {
     }
 }
 
-fn local_busy(app: &AppHandle) -> bool {
+/// Whether a dictation of this PC's is recording, and how many are still
+/// being transcribed
+fn local_dictation(app: &AppHandle) -> (bool, usize) {
     let state = app.state::<AppState>();
     let recording = state.phase.lock().active();
-    priority::local_is_busy(recording, state.jobs_in_flight.load(Ordering::SeqCst))
+    (recording, state.jobs_in_flight.load(Ordering::SeqCst))
+}
+
+fn local_busy(app: &AppHandle) -> bool {
+    let (recording, jobs) = local_dictation(app);
+    priority::local_is_busy(recording, jobs)
+}
+
+/// Tell the paired machines listening that a dictation here started or moved
+/// on. Called after each change of the phase or of the jobs in flight.
+pub fn dictation_changed(app: &AppHandle) {
+    let Some(manager) = app.try_state::<ShareManager>() else {
+        return;
+    };
+    manager.dictation.refresh(|| {
+        let (recording, jobs) = local_dictation(app);
+        (recording, jobs > 0)
+    });
 }
 
 /// What other machines are served: the model loaded here, or in server mode
@@ -294,7 +322,13 @@ impl ShareManager {
             app: app.clone(),
             pending_count: AtomicUsize::new(0),
         });
-        let router = api::router(ApiState::new(backend, self.pairing.clone()));
+        let (serving, serving_rx) = tokio::sync::watch::channel(());
+        let router = api::router(ApiState::new(
+            backend,
+            self.pairing.clone(),
+            self.dictation.clone(),
+            serving_rx,
+        ));
         let task = tauri::async_runtime::spawn(async move {
             let service = router.into_make_service_with_connect_info::<SocketAddr>();
             if let Err(e) = axum::serve(listener, service).await {
@@ -337,7 +371,12 @@ impl ShareManager {
             announce_error,
             address: addresses.first().map(|ip| format!("http://{}:{}", ip, port)),
         };
-        *running = Some(Running { task, announcement, port });
+        *running = Some(Running {
+            task,
+            announcement,
+            port,
+            _serving: serving,
+        });
         drop(running);
         self.publish(app);
     }

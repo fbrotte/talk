@@ -2,6 +2,7 @@
 //! mode and any OpenAI client work against it unchanged.
 
 use super::audio;
+use super::dictation::{self, DictationFeed, DictationState};
 use super::formats::{self, Segment, Transcription, ALLOWED_RESPONSE_FORMATS};
 use super::pairing::{PairingError, PairingStore, PendingPairing, REQUEST_TTL_SECONDS};
 use super::priority::{self, Turn};
@@ -13,6 +14,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use futures::StreamExt;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -20,6 +22,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 pub const MAX_UPLOAD_SIZE: usize = 25 * 1024 * 1024;
 pub const ALLOWED_EXTENSIONS: [&str; 1] = ["wav"];
@@ -30,6 +33,8 @@ pub const DEFAULT_LANGUAGE: &str = "fr";
 /// is cut off before it fills the memory.
 const BODY_LIMIT: usize = MAX_UPLOAD_SIZE + 1024 * 1024;
 const SAMPLES_PER_SECOND: f64 = audio::TARGET_RATE as f64;
+/// How often a quiet dictation feed says it is still there
+pub const DICTATION_PING: Duration = Duration::from_secs(15);
 
 #[derive(Debug)]
 pub enum TranscribeError {
@@ -74,16 +79,29 @@ pub struct ApiState {
     /// dictation shortcut of blocking threads
     engine_slot: Arc<tokio::sync::Semaphore>,
     wait_budget: Duration,
+    dictation: DictationFeed,
+    /// Closes when this server stops: the dictation feeds a connection still
+    /// holds open end with it
+    serving: watch::Receiver<()>,
+    ping: Duration,
 }
 
 impl ApiState {
-    pub fn new(backend: Arc<dyn ShareBackend>, pairing: Arc<Mutex<PairingStore>>) -> Self {
+    pub fn new(
+        backend: Arc<dyn ShareBackend>,
+        pairing: Arc<Mutex<PairingStore>>,
+        dictation: DictationFeed,
+        serving: watch::Receiver<()>,
+    ) -> Self {
         Self {
             backend,
             pairing,
             queue: Arc::new(AtomicUsize::new(0)),
             engine_slot: Arc::new(tokio::sync::Semaphore::new(1)),
             wait_budget: priority::WAIT_BUDGET,
+            dictation,
+            serving,
+            ping: DICTATION_PING,
         }
     }
 }
@@ -233,7 +251,8 @@ fn text_response(body: String) -> Response {
 
 /// The Bearer check. `COUNT` says whether the request counts as use of the
 /// token: transcriptions do, the models listing a client polls does not.
-struct Auth<const COUNT: bool>;
+/// Holds the token, for a route that checks it again later.
+struct Auth<const COUNT: bool>(String);
 
 impl<const COUNT: bool> FromRequestParts<ApiState> for Auth<COUNT> {
     type Rejection = ApiError;
@@ -251,7 +270,7 @@ impl<const COUNT: bool> FromRequestParts<ApiState> for Auth<COUNT> {
             .ok_or_else(|| ApiError::unauthorized("Missing Bearer token"))?;
 
         match state.backend.check_token(token, COUNT) {
-            Ok(true) => Ok(Auth),
+            Ok(true) => Ok(Auth(token.to_string())),
             Ok(false) => Err(ApiError::unauthorized("Invalid or revoked token")),
             Err(e) => {
                 eprintln!("Share: token check failed: {}", e);
@@ -577,15 +596,81 @@ async fn create_transcription_stream(
         }
     };
 
-    let body = Body::from_stream(futures::stream::iter(
+    Ok(event_stream(Body::from_stream(futures::stream::iter(
         chunks.into_iter().map(Ok::<_, Infallible>),
-    ));
+    ))))
+}
+
+fn event_stream(body: Body) -> Response {
     let mut response = Response::new(body);
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
-    Ok(response)
+    response
+}
+
+// ---------------------------------------------------------------------------
+// Dictation state
+// ---------------------------------------------------------------------------
+
+async fn dictation_state(State(state): State<ApiState>, _auth: Auth<false>) -> Response {
+    json_response(
+        StatusCode::OK,
+        serde_json::to_string(&state.dictation.current()).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+fn change_event(change: &DictationState) -> String {
+    let at = change.since.unwrap_or_else(dictation::now_ms);
+    formats::dictation_event(change.recording, change.transcribing, at)
+}
+
+/// One listener of the dictation feed
+struct Listener {
+    changes: watch::Receiver<DictationState>,
+    serving: watch::Receiver<()>,
+    ping: tokio::time::Interval,
+    backend: Arc<dyn ShareBackend>,
+    token: String,
+}
+
+impl Listener {
+    /// The next thing to send, or `None` to end the stream: the server
+    /// stopped, or the token was revoked since the connection opened.
+    async fn next(&mut self) -> Option<String> {
+        tokio::select! {
+            changed = self.changes.changed() => {
+                changed.ok()?;
+                let change = *self.changes.borrow_and_update();
+                Some(change_event(&change))
+            }
+            _ = self.serving.changed() => None,
+            _ = self.ping.tick() => {
+                matches!(self.backend.check_token(&self.token, false), Ok(true))
+                    .then(|| formats::PING_COMMENT.to_string())
+            }
+        }
+    }
+}
+
+async fn dictation_events(State(state): State<ApiState>, Auth(token): Auth<false>) -> Response {
+    let mut changes = state.dictation.subscribe();
+    let current = *changes.borrow_and_update();
+    let first = change_event(&current);
+    let listener = Listener {
+        changes,
+        serving: state.serving.clone(),
+        ping: tokio::time::interval_at(tokio::time::Instant::now() + state.ping, state.ping),
+        backend: state.backend.clone(),
+        token,
+    };
+    let rest = futures::stream::unfold(listener, |mut listener| async move {
+        let chunk = listener.next().await?;
+        Some((chunk, listener))
+    });
+    let chunks = futures::stream::once(async move { first }).chain(rest);
+    event_stream(Body::from_stream(chunks.map(Ok::<_, Infallible>)))
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +820,8 @@ pub fn router(state: ApiState) -> Router {
             "/v1/audio/transcriptions/stream",
             post(create_transcription_stream).layer(upload_limit),
         )
+        .route("/v1/dictation/state", get(dictation_state))
+        .route("/v1/dictation/events", get(dictation_events))
         .route("/pairing/request", post(pairing_request))
         .route("/pairing/confirm", post(pairing_confirm))
         .fallback(not_found)
@@ -831,19 +918,35 @@ mod tests {
         pairing: Arc<Mutex<PairingStore>>,
         app: Router,
         slot: Arc<tokio::sync::Semaphore>,
+        dictation: DictationFeed,
+        serving: Mutex<Option<watch::Sender<()>>>,
     }
 
     fn harness() -> Harness {
-        harness_with_budget(priority::WAIT_BUDGET)
+        build(priority::WAIT_BUDGET, DICTATION_PING)
     }
 
     fn harness_with_budget(budget: Duration) -> Harness {
+        build(budget, DICTATION_PING)
+    }
+
+    fn build(budget: Duration, ping: Duration) -> Harness {
         let fake = Fake::new();
         let pairing = Arc::new(Mutex::new(PairingStore::default()));
-        let mut state = ApiState::new(fake.clone(), pairing.clone());
+        let dictation = DictationFeed::default();
+        let (serving, serving_rx) = watch::channel(());
+        let mut state = ApiState::new(fake.clone(), pairing.clone(), dictation.clone(), serving_rx);
         state.wait_budget = budget;
+        state.ping = ping;
         let slot = state.engine_slot.clone();
-        Harness { fake, pairing, app: router(state), slot }
+        Harness {
+            fake,
+            pairing,
+            app: router(state),
+            slot,
+            dictation,
+            serving: Mutex::new(Some(serving)),
+        }
     }
 
     impl Harness {
@@ -858,6 +961,35 @@ mod tests {
             let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
             (status, headers, String::from_utf8_lossy(&bytes).to_string())
         }
+
+        /// The dictation feed, one chunk at a time
+        async fn listen(&self, token: &str) -> axum::body::BodyDataStream {
+            let request = with_token(
+                Request::get("/v1/dictation/events").body(Body::empty()).unwrap(),
+                token,
+                "/v1/dictation/events",
+            );
+            let response = self.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "text/event-stream");
+            response.into_body().into_data_stream()
+        }
+    }
+
+    /// The next chunk of a feed, `None` once it ended
+    async fn next_chunk(feed: &mut axum::body::BodyDataStream) -> Option<String> {
+        tokio::time::timeout(Duration::from_secs(5), feed.next())
+            .await
+            .expect("the feed said nothing")
+            .map(|chunk| String::from_utf8_lossy(&chunk.unwrap()).to_string())
+    }
+
+    fn dictation_data(chunk: &str) -> serde_json::Value {
+        let data = chunk
+            .strip_prefix("event: dictation\ndata: ")
+            .and_then(|rest| rest.strip_suffix("\n\n"))
+            .unwrap_or_else(|| panic!("not a dictation event: {:?}", chunk));
+        json(data)
     }
 
     const BOUNDARY: &str = "XBOUNDARYX";
@@ -1433,5 +1565,106 @@ mod tests {
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json(&body)["message"], "Not Found");
+    }
+
+    #[tokio::test]
+    async fn the_dictation_routes_need_a_token_and_do_not_count_as_use() {
+        let h = harness();
+        for uri in ["/v1/dictation/state", "/v1/dictation/events"] {
+            let (status, headers, body) = h.send(Request::get(uri).body(Body::empty()).unwrap()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{}", uri);
+            assert_eq!(headers[header::WWW_AUTHENTICATE], "Bearer");
+            assert_eq!(json(&body)["message"], "Missing Bearer token");
+
+            let request = with_token(Request::get(uri).body(Body::empty()).unwrap(), "sk_wrong", uri);
+            let (status, _, _) = h.send(request).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{}", uri);
+        }
+
+        let token = h.token();
+        let request = with_token(
+            Request::get("/v1/dictation/state").body(Body::empty()).unwrap(),
+            &token,
+            "/v1/dictation/state",
+        );
+        let (status, _, _) = h.send(request).await;
+        assert_eq!(status, StatusCode::OK);
+        let _feed = h.listen(&token).await;
+        assert_eq!(h.fake.db.list_share_tokens().unwrap()[0].last_used_at, None);
+    }
+
+    #[tokio::test]
+    async fn the_state_is_idle_at_first_then_follows_the_dictation() {
+        let h = harness();
+        let token = h.token();
+        let state = || {
+            with_token(
+                Request::get("/v1/dictation/state").body(Body::empty()).unwrap(),
+                &token,
+                "/v1/dictation/state",
+            )
+        };
+
+        let (status, headers, body) = h.send(state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+        assert_eq!(body, r#"{"recording":false,"transcribing":false,"since":null}"#);
+
+        let before = dictation::now_ms();
+        h.dictation.refresh(|| (true, false));
+        let body = json(&h.send(state()).await.2);
+        assert_eq!(body["recording"], true);
+        assert_eq!(body["transcribing"], false);
+        assert!(body["since"].as_u64().unwrap() >= before);
+    }
+
+    #[tokio::test]
+    async fn the_feed_opens_on_the_current_state_then_sends_each_change() {
+        let h = harness();
+        let mut feed = h.listen(&h.token()).await;
+
+        let first = dictation_data(&next_chunk(&mut feed).await.unwrap());
+        assert_eq!(first["recording"], false);
+        assert_eq!(first["transcribing"], false);
+        assert!(first["at"].is_u64());
+
+        h.dictation.refresh(|| (true, false));
+        let pressed = dictation_data(&next_chunk(&mut feed).await.unwrap());
+        assert_eq!(pressed["recording"], true);
+        assert_eq!(pressed["at"].as_u64(), h.dictation.current().since);
+
+        h.dictation.refresh(|| (false, true));
+        let transcribing = dictation_data(&next_chunk(&mut feed).await.unwrap());
+        assert_eq!(transcribing["recording"], false);
+        assert_eq!(transcribing["transcribing"], true);
+
+        // A listener arriving now hears the state as it stands
+        let mut late = h.listen(&h.token()).await;
+        let current = dictation_data(&next_chunk(&mut late).await.unwrap());
+        assert_eq!(current["transcribing"], true);
+        assert_eq!(current["at"].as_u64(), h.dictation.current().since);
+    }
+
+    #[tokio::test]
+    async fn a_quiet_feed_pings_and_ends_once_its_token_is_revoked() {
+        let h = build(priority::WAIT_BUDGET, Duration::from_millis(20));
+        let mut feed = h.listen(&h.token()).await;
+        next_chunk(&mut feed).await.unwrap();
+
+        assert_eq!(next_chunk(&mut feed).await.unwrap(), ": ping\n\n");
+
+        let id = h.fake.db.list_share_tokens().unwrap()[0].id.clone();
+        h.fake.db.revoke_share_token(&id).unwrap();
+        assert_eq!(next_chunk(&mut feed).await, None);
+    }
+
+    #[tokio::test]
+    async fn the_feed_ends_when_the_server_stops() {
+        let h = harness();
+        let mut feed = h.listen(&h.token()).await;
+        next_chunk(&mut feed).await.unwrap();
+
+        h.serving.lock().take();
+        assert_eq!(next_chunk(&mut feed).await, None);
     }
 }

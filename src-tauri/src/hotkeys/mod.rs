@@ -387,6 +387,7 @@ impl OverlayLease {
         state.overlay_gen.begin();
         *state.overlay_hold_until.lock() = None;
         let count = state.jobs_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        crate::share::dictation_changed(app);
         announce_jobs(app, count);
         Self { app: app.clone() }
     }
@@ -438,6 +439,7 @@ impl Drop for OverlayLease {
         // fetch_sub returns the value before the subtraction, so 1 means this
         // was the last one.
         let before = state.jobs_in_flight.fetch_sub(1, Ordering::SeqCst);
+        crate::share::dictation_changed(&self.app);
         announce_jobs(&self.app, before - 1);
         let was_last = before == 1;
         // Before the recording lock below: the sync reads it too.
@@ -798,6 +800,9 @@ fn start_recording_internal(app: &AppHandle) -> Result<(), String> {
     let Some(generation) = state.phase.lock().begin_open() else {
         return Ok(());
     };
+    // Before anything that takes time, so a call on a paired machine mutes
+    // before the first word.
+    crate::share::dictation_changed(app);
     state.overlay_gen.begin();
     *state.overlay_hold_until.lock() = None;
     crate::overlay::show(app);

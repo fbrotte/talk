@@ -127,6 +127,21 @@ pub fn error_event(message: &str, kind: &str) -> String {
     sse_event("error", &Failure { message, kind })
 }
 
+#[derive(Serialize)]
+struct DictationChange {
+    recording: bool,
+    transcribing: bool,
+    at: u64,
+}
+
+/// The owner's dictation as it stood at `at`
+pub fn dictation_event(recording: bool, transcribing: bool, at: u64) -> String {
+    sse_event("dictation", &DictationChange { recording, transcribing, at })
+}
+
+/// A comment, which listeners skip, to keep an idle line open
+pub const PING_COMMENT: &str = ": ping\n\n";
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
